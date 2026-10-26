@@ -2,6 +2,8 @@ pub mod base;
 pub mod declarative_providers;
 mod experiments;
 pub mod extensions;
+#[cfg(all(feature = "system-keyring", any(windows, test)))]
+mod keyring_store;
 mod migrations;
 pub mod paths;
 pub mod permission;

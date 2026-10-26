@@ -3,7 +3,7 @@ use crate::config::GooseMode;
 use crate::providers::private_file::{private_file_target_path, write_private_file};
 use fs2::FileExt;
 use goose_providers::thinking::ThinkingEffort;
-#[cfg(feature = "system-keyring")]
+#[cfg(all(feature = "system-keyring", not(windows)))]
 use keyring::Entry;
 use once_cell::sync::OnceCell;
 use serde::{Deserialize, Serialize};
@@ -30,7 +30,7 @@ fn secrets_lock_path(path: &Path) -> PathBuf {
 
 #[cfg(feature = "system-keyring")]
 const KEYRING_SERVICE: &str = "goose";
-#[cfg(feature = "system-keyring")]
+#[cfg(all(feature = "system-keyring", not(windows)))]
 const KEYRING_USERNAME: &str = "secrets";
 pub const CONFIG_YAML_NAME: &str = "config.yaml";
 
@@ -685,19 +685,25 @@ impl Config {
     }
 
     pub fn all_secrets(&self) -> Result<HashMap<String, Value>, ConfigError> {
-        let mut cache = self.secrets_cache.lock().unwrap();
+        if let Some(values) = self.secrets_cache.lock().unwrap().clone() {
+            return Ok(values);
+        }
 
-        let values = if let Some(ref cached_secrets) = *cache {
-            cached_secrets.clone()
-        } else {
-            tracing::debug!("secrets cache miss, fetching from storage");
-            let loaded = self.load_secrets_from_storage()?;
-
-            *cache = Some(loaded.clone());
-            loaded
+        let _mutation_guard = self.guard.lock().unwrap();
+        #[cfg(all(feature = "system-keyring", windows))]
+        let _storage_lock = match &self.secrets {
+            SecretStorage::Keyring { .. } => Some(self.lock_secrets_for_mutation()?),
+            SecretStorage::File { .. } => None,
         };
+        let mut cache = self.secrets_cache.lock().unwrap();
+        if let Some(values) = cache.as_ref() {
+            return Ok(values.clone());
+        }
 
-        Ok(values)
+        tracing::debug!("secrets cache miss, fetching from storage");
+        let loaded = self.load_secrets_from_storage()?;
+        *cache = Some(loaded.clone());
+        Ok(loaded)
     }
 
     /// Parse an environment variable value into a JSON Value.
@@ -960,7 +966,17 @@ impl Config {
 
     fn load_secrets_from_storage(&self) -> Result<HashMap<String, Value>, ConfigError> {
         match &self.secrets {
-            #[cfg(feature = "system-keyring")]
+            #[cfg(all(feature = "system-keyring", windows))]
+            SecretStorage::Keyring { service } => {
+                let store =
+                    crate::config::keyring_store::SystemCredentialStore::new(service.clone());
+                match crate::config::keyring_store::read(&store) {
+                    Ok(Some(values)) => Ok(values),
+                    Ok(None) => self.fallback_to_file_storage(),
+                    Err(error) => Err(ConfigError::KeyringError(error)),
+                }
+            }
+            #[cfg(all(feature = "system-keyring", not(windows)))]
             SecretStorage::Keyring { service } => {
                 let result =
                     self.handle_keyring_operation(|entry| entry.get_password(), service, None);
@@ -1014,7 +1030,16 @@ impl Config {
 
     fn write_all_secrets(&self, values: &HashMap<String, Value>) -> Result<(), ConfigError> {
         match &self.secrets {
-            #[cfg(feature = "system-keyring")]
+            #[cfg(all(feature = "system-keyring", windows))]
+            SecretStorage::Keyring { service } => {
+                let store =
+                    crate::config::keyring_store::SystemCredentialStore::new(service.clone());
+                if let Err(error) = crate::config::keyring_store::write(&store, values) {
+                    self.invalidate_secrets_cache();
+                    return Err(ConfigError::KeyringError(error));
+                }
+            }
+            #[cfg(all(feature = "system-keyring", not(windows)))]
             SecretStorage::Keyring { service } => {
                 let json_value = serde_json::to_string(values)?;
                 match self.handle_keyring_operation(
@@ -1182,7 +1207,7 @@ impl Config {
     }
 
     /// Write secrets to file storage (used for fallback)
-    #[cfg(feature = "system-keyring")]
+    #[cfg(all(feature = "system-keyring", not(windows)))]
     fn write_secrets_to_file(&self, values: &HashMap<String, Value>) -> Result<(), ConfigError> {
         std::fs::create_dir_all(Paths::config_dir())?;
         let path = Self::secrets_file_path();
@@ -1203,7 +1228,7 @@ impl Config {
     }
 
     /// Check if an error string indicates a keyring availability issue that should trigger fallback
-    #[cfg(feature = "system-keyring")]
+    #[cfg(all(feature = "system-keyring", not(windows)))]
     fn is_keyring_availability_error(&self, error_str: &str) -> bool {
         let lower = error_str.to_lowercase();
         lower.contains("keyring")
@@ -1214,13 +1239,13 @@ impl Config {
     }
 
     /// Get a keyring entry for the specified service
-    #[cfg(feature = "system-keyring")]
+    #[cfg(all(feature = "system-keyring", not(windows)))]
     fn get_keyring_entry(service: &str) -> Result<keyring::Entry, keyring::Error> {
         Entry::new(service, KEYRING_USERNAME)
     }
 
     /// Handle keyring errors with automatic fallback to file storage
-    #[cfg(feature = "system-keyring")]
+    #[cfg(all(feature = "system-keyring", not(windows)))]
     fn handle_keyring_fallback_error<T>(
         &self,
         keyring_err: &keyring::Error,
@@ -1242,7 +1267,7 @@ impl Config {
     }
 
     /// Handle keyring operation with automatic fallback to file storage
-    #[cfg(feature = "system-keyring")]
+    #[cfg(all(feature = "system-keyring", not(windows)))]
     fn handle_keyring_operation<T>(
         &self,
         operation: impl FnOnce(keyring::Entry) -> Result<T, keyring::Error>,

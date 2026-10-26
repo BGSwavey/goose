@@ -387,11 +387,20 @@ fn keyring_disabled_in_config(config_path: &Path) -> bool {
 }
 
 #[cfg(feature = "system-keyring")]
+fn valid_build_keyring_service(service: &str) -> bool {
+    !service.is_empty()
+        && !service.eq_ignore_ascii_case(DEFAULT_KEYRING_SERVICE)
+        && service
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
+#[cfg(feature = "system-keyring")]
 fn default_keyring_service() -> &'static str {
     if let Some(service) = BUILD_KEYRING_SERVICE {
         assert!(
-            !service.is_empty() && service != DEFAULT_KEYRING_SERVICE,
-            "GOOSE_BUILD_KEYRING_SERVICE must name a separate nonempty vault"
+            valid_build_keyring_service(service),
+            "GOOSE_BUILD_KEYRING_SERVICE must name a distinct lowercase ASCII vault"
         );
         service
     } else {
@@ -1010,14 +1019,7 @@ impl Config {
     fn secrets_mutation_lock_path(&self) -> Result<PathBuf, ConfigError> {
         let storage_path = match &self.secrets {
             #[cfg(all(feature = "system-keyring", windows))]
-            SecretStorage::Keyring { service } => {
-                let name = if service == DEFAULT_KEYRING_SERVICE {
-                    "secrets.yaml".to_string()
-                } else {
-                    crate::config::keyring_store::service_lock_name(service)
-                };
-                Paths::platform_config_dir().join(name)
-            }
+            SecretStorage::Keyring { .. } => Paths::platform_config_dir().join("secrets.yaml"),
             #[cfg(all(feature = "system-keyring", not(windows)))]
             SecretStorage::Keyring { .. } => Self::secrets_file_path(),
             SecretStorage::File { path } => path.clone(),
@@ -1831,7 +1833,7 @@ mod tests {
 
     #[cfg(all(windows, feature = "system-keyring"))]
     #[test]
-    fn keyring_lock_is_shared_by_profiles_using_the_same_service() -> Result<(), ConfigError> {
+    fn keyring_lock_is_shared_across_profiles_and_services() -> Result<(), ConfigError> {
         let _guard = env_lock::lock_env([("GOOSE_DISABLE_KEYRING", None::<&str>)]);
         let first_dir = TempDir::new().unwrap();
         let second_dir = TempDir::new().unwrap();
@@ -1841,9 +1843,25 @@ mod tests {
 
         let lock_path = first.secrets_mutation_lock_path()?;
         assert_eq!(lock_path, second.secrets_mutation_lock_path()?);
-        assert_ne!(lock_path, other.secrets_mutation_lock_path()?);
+        assert_eq!(lock_path, other.secrets_mutation_lock_path()?);
         assert!(lock_path.starts_with(Paths::platform_config_dir()));
         Ok(())
+    }
+
+    #[cfg(feature = "system-keyring")]
+    #[test]
+    fn build_keyring_service_cannot_alias_existing_targets() {
+        assert!(valid_build_keyring_service("goose-issue609-sidecar-v1"));
+        for service in [
+            "",
+            "goose",
+            "GOOSE",
+            "Goose",
+            "secrets.v2.manifest.goose",
+            "Goose-test",
+        ] {
+            assert!(!valid_build_keyring_service(service));
+        }
     }
 
     #[test]

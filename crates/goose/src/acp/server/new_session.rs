@@ -3,6 +3,7 @@ use crate::acp::server::{meta_string, validate_absolute_cwd, ResultExt};
 use crate::agents::ExtensionLoadResult;
 use crate::config::{Config, GooseMode};
 use crate::model_config::resolve_provider_and_model_config;
+use crate::providers::get_from_registry;
 use crate::recipe::Recipe;
 use crate::session::{ExtensionData, Session, SessionType};
 
@@ -141,13 +142,17 @@ impl GooseAcpAgent {
             .await?;
 
         let recipe_settings = rendered.as_ref().and_then(|r| r.settings.as_ref());
-        let (provider, model_config) = resolve_provider_and_model_config(
-            config,
-            meta_string(args.meta.as_ref(), "provider")?,
-            recipe_settings,
-        )
-        .await
-        .internal_err_ctx("Failed to resolve provider and model")?;
+        let requested_provider = meta_string(args.meta.as_ref(), "provider")?;
+        if let Some(provider) = recipe_settings
+            .and_then(|s| s.goose_provider.as_deref())
+            .or(requested_provider.as_deref())
+        {
+            get_from_registry(provider).await.invalid_params_err()?;
+        }
+        let (provider, model_config) =
+            resolve_provider_and_model_config(config, requested_provider, recipe_settings)
+                .await
+                .internal_err_ctx("Failed to resolve provider and model")?;
 
         let goose_extensions = meta_goose_extensions(args.meta.as_ref())?;
         let recipe_extensions = rendered.as_ref().and_then(|r| r.extensions.as_deref());

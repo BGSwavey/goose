@@ -1,6 +1,7 @@
 use rmcp::transport::auth::{AuthError, CredentialStore, StoredCredentials};
 use serde::{Deserialize, Serialize};
 
+use crate::config::base::ConfigError;
 use crate::config::Config;
 
 #[derive(Serialize, Deserialize)]
@@ -34,9 +35,18 @@ impl GooseCredentialStore {
         let config = Config::global();
         let key = self.secret_key();
 
-        match config.get_secret::<PersistedCredentials>(&key) {
+        Self::map_loaded(config.get_secret::<PersistedCredentials>(&key))
+    }
+
+    fn map_loaded(
+        result: Result<PersistedCredentials, ConfigError>,
+    ) -> Result<Option<PersistedCredentials>, AuthError> {
+        match result {
             Ok(credentials) => Ok(Some(credentials)),
-            Err(_) => Ok(None),
+            Err(ConfigError::NotFound(_)) => Ok(None),
+            Err(error) => Err(AuthError::InternalError(format!(
+                "Failed to load credentials: {error}"
+            ))),
         }
     }
 
@@ -124,5 +134,19 @@ mod tests {
 
         assert_eq!(credentials.client_id, "client-id");
         assert_eq!(credentials.granted_scopes, vec!["scope.read"]);
+    }
+
+    #[test]
+    fn storage_failure_is_not_treated_as_missing_credentials() {
+        assert!(matches!(
+            GooseCredentialStore::map_loaded(Err(ConfigError::NotFound("oauth".to_string()))),
+            Ok(None)
+        ));
+        assert!(matches!(
+            GooseCredentialStore::map_loaded(Err(ConfigError::KeyringError(
+                "integrity check failed".to_string()
+            ))),
+            Err(AuthError::InternalError(_))
+        ));
     }
 }

@@ -95,6 +95,10 @@ fn digest(payload: &str) -> String {
     encoded
 }
 
+pub(crate) fn service_lock_name(service: &str) -> String {
+    format!("secrets.keyring.{}", digest(service))
+}
+
 fn split_chunks(payload: &str) -> Result<Vec<String>, String> {
     if payload.len() > MAX_SECRET_BYTES {
         return Err("Serialized keyring secrets exceed the supported size".to_string());
@@ -396,6 +400,16 @@ mod tests {
             .iter()
             .all(|chunk| chunk.encode_utf16().count() <= MAX_CHUNK_UTF16_UNITS));
         assert_eq!(chunks.concat(), payload);
+    }
+
+    #[test]
+    fn lock_name_is_stable_and_specific_to_the_vault() {
+        assert_eq!(
+            service_lock_name("goose-test"),
+            service_lock_name("goose-test")
+        );
+        assert_ne!(service_lock_name("goose-test"), service_lock_name("goose"));
+        assert!(!service_lock_name("goose-test").contains("goose-test"));
     }
 
     #[test]

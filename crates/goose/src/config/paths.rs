@@ -5,6 +5,17 @@ use std::path::PathBuf;
 pub struct Paths;
 
 impl Paths {
+    #[cfg(windows)]
+    pub(crate) fn platform_config_dir() -> PathBuf {
+        choose_app_strategy(AppStrategyArgs {
+            top_level_domain: "Block".to_string(),
+            author: "Block".to_string(),
+            app_name: "goose".to_string(),
+        })
+        .expect("goose requires a home dir")
+        .config_dir()
+    }
+
     fn get_dir(dir_type: DirType) -> PathBuf {
         if let Some(base) = Self::path_root() {
             match dir_type {

@@ -626,25 +626,6 @@ fn resolve_default_provider_model_config(
     Ok((resolved_provider, resolved_model_config))
 }
 
-async fn resolve_provider_default_model_config(
-    provider_name: &str,
-) -> Result<goose_providers::model::ModelConfig, agent_client_protocol::Error> {
-    let entry = crate::providers::get_from_registry(provider_name)
-        .await
-        .map_err(|error| {
-            agent_client_protocol::Error::invalid_params()
-                .data(format!("Unknown provider '{}': {}", provider_name, error))
-        })?;
-    crate::model_config::model_config_from_user_config(
-        provider_name,
-        &entry.metadata().default_model,
-    )
-    .map_err(|error| {
-        agent_client_protocol::Error::internal_error()
-            .data(format!("Failed to resolve model: {}", error))
-    })
-}
-
 fn render_resource_link(link: &ResourceLink) -> String {
     let inlined_file = Url::parse(&link.uri)
         .ok()

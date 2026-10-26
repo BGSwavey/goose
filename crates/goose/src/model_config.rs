@@ -1,6 +1,8 @@
 use crate::config::{Config, ConfigError};
 use crate::conversation::message::Message;
 use crate::providers::base::Provider;
+use crate::providers::get_from_registry;
+use crate::recipe::Settings;
 use anyhow::{anyhow, Result};
 use goose_providers::conversation::token_usage::ProviderUsage;
 use goose_providers::errors::ProviderError;
@@ -16,6 +18,45 @@ pub fn model_config_from_user_config(
 ) -> Result<ModelConfig> {
     let model = base_model_config_from_user_config(provider_name, model_name.as_ref())?;
     materialize_model_config(provider_name, model)
+}
+
+pub async fn resolve_provider_and_model_config(
+    config: &Config,
+    requested_provider: Option<String>,
+    recipe_settings: Option<&Settings>,
+) -> Result<(String, ModelConfig)> {
+    let recipe_model = recipe_settings.and_then(|s| s.goose_model.clone());
+    let explicit_provider = recipe_settings
+        .and_then(|s| s.goose_provider.clone())
+        .or(requested_provider);
+
+    let (provider, model) = match explicit_provider {
+        Some(provider) => {
+            let model = match recipe_model {
+                Some(model) => model,
+                None => get_from_registry(&provider)
+                    .await?
+                    .metadata()
+                    .default_model
+                    .clone(),
+            };
+            (provider, model)
+        }
+        None => {
+            let provider = config.get_goose_provider()?;
+            let model = match recipe_model {
+                Some(model) => model,
+                None => config.get_goose_model()?,
+            };
+            (provider, model)
+        }
+    };
+
+    let mut model_config = model_config_from_user_config(&provider, &model)?;
+    if let Some(temperature) = recipe_settings.and_then(|s| s.temperature) {
+        model_config = model_config.with_temperature(Some(temperature));
+    }
+    Ok((provider, model_config))
 }
 
 pub fn model_config_from_user_config_with_session_settings(

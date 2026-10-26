@@ -974,7 +974,7 @@ async fn execute_job(
             .settings
             .as_ref()
             .and_then(|s| s.max_turns)
-            .map(|turns| turns as u32),
+            .map(|turns| u32::try_from(turns).unwrap_or(u32::MAX)),
     };
 
     let stream = agent
